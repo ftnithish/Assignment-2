@@ -1,0 +1,103 @@
+@RestResource(urlMapping='/LeadService/*')
+global with sharing class LeadRestResource {
+
+     @HttpPost
+    global static List<Map<String, Object>> createLeads(List<Lead> inputLeads) {
+        List<Map<String, Object>> results = new List<Map<String, Object>>();
+
+        try {
+            
+            Set<String> emails = new Set<String>();
+            for (Lead l : inputLeads) {
+                if (l.Email != null) {
+                    emails.add(l.Email);
+                }
+            }
+
+            Map<String, Lead> existingLeads = new Map<String, Lead>();
+            if (!emails.isEmpty()) {
+                for (Lead existing : [
+                    SELECT Id, Email 
+                    FROM Lead 
+                    WHERE Email IN :emails
+                ]) {
+                    existingLeads.put(existing.Email, existing);
+                }
+            }
+
+            
+            List<Lead> leadsToInsert = new List<Lead>();
+
+           
+            for (Lead l : inputLeads) {
+                Map<String, Object> res = new Map<String, Object>();
+
+                if (l.Email != null && existingLeads.containsKey(l.Email)) {
+                    
+                    res.put('status', 'error');
+                    res.put('message', 'Lead creation failed');
+                    res.put('errors', 'Duplicate Email Id');
+                } else {
+                    leadsToInsert.add(l);
+                }
+                results.add(res);
+            }
+
+           
+            if (!leadsToInsert.isEmpty()) {
+                Database.SaveResult[] saveResults = Database.insert(leadsToInsert, false);
+
+                for (Integer i = 0; i < saveResults.size(); i++) {
+                    Map<String, Object> res = results[i];
+
+                    if (saveResults[i].isSuccess()) {
+                        res.put('status', 'success');
+                        res.put('message', 'Lead created successfully');
+                        res.put('leadId', saveResults[i].getId());
+                    } else {
+                        res.put('status', 'error');
+                        res.put('message', 'Lead creation failed');
+                        res.put('errors', saveResults[i].getErrors()[0].getMessage());
+                    }
+                }
+            }
+ 
+            sendEmailNotification(results);
+
+        } catch (Exception e) {
+            
+            Map<String, Object> errorRes = new Map<String, Object>();
+            errorRes.put('status', 'error');
+            errorRes.put('message', 'Unexpected error: ' + e.getMessage());
+            results.add(errorRes);
+
+            sendEmailNotification(results);
+        }
+
+        return results;
+    }
+
+      
+    private static void sendEmailNotification(List<Map<String, Object>> results) {
+        Messaging.SingleEmailMessage mail = new Messaging.SingleEmailMessage();
+        mail.setToAddresses(new String[] { UserInfo.getUserEmail() });
+        mail.setSubject('Lead Creation Report - ' + Date.today().format());
+
+        String body = 'Hello Admin,\n\nHere is the Lead creation summary:\n\n';
+
+          
+        for (Map<String, Object> r : results) {
+            body += 'Status: ' + r.get('status') + '\n';
+            body += 'Message: ' + r.get('message') + '\n';
+            if (r.containsKey('errors')) body += 'Errors: ' + r.get('errors') + '\n';
+            if (r.containsKey('leadId')) body += 'Lead Id: ' + r.get('leadId') + '\n';
+            body += '-----------------------------\n';
+        }
+
+        body += '\nThank you,\nSalesforce System';
+
+        mail.setPlainTextBody(body);
+ 
+        Messaging.sendEmail(new Messaging.SingleEmailMessage[] { mail });
+    }
+}

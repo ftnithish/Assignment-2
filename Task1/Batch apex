@@ -1,0 +1,68 @@
+global class LeadDailyReportBatch implements Database.Batchable<SObject>, Database.Stateful {
+    private String csvContent = 'Lead Id,Lead Name,Company,Email,CreatedDate\n';
+    private Integer leadCount = 0;
+
+    global Database.QueryLocator start(Database.BatchableContext bc) {
+        return Database.getQueryLocator(
+            [
+                SELECT Id, Name, Company, Email, CreatedDate
+                FROM Lead
+                WHERE CreatedDate = TODAY
+            ]
+        );
+    }
+
+    global void execute(Database.BatchableContext bc, List<Lead> scope) {
+        for (Lead l : scope) {
+            leadCount++;
+            csvContent += '"' + l.Id + '","' +
+                          l.Name + '","' +
+                          l.Company + '","' +
+                          (l.Email != null ? l.Email : '') + '","' +
+                          l.CreatedDate.format() + '"\n';
+        }
+    }
+
+    global void finish(Database.BatchableContext bc) {
+        User sysAdmin = [SELECT Id, Email FROM User WHERE Profile.Name = 'System Administrator' LIMIT 1];
+        Messaging.SingleEmailMessage mail = new Messaging.SingleEmailMessage();
+        mail.setToAddresses(new String[] { sysAdmin.Email });
+        mail.setSubject('Daily Lead Report - ' + Date.Today().format());
+
+        if (leadCount > 0) {
+            mail.setPlainTextBody(
+                'Hello Admin,\n\n' +
+                'There are ' + leadCount + ' leads created today.\n' +
+                'Please find the attached CSV file.\n\nThank you!'
+            );
+
+            Blob csvBlob = Blob.valueOf(csvContent);
+
+            Messaging.EmailFileAttachment attachment = new Messaging.EmailFileAttachment();
+            attachment.setFileName('LeadReport_' + Date.today().format() + '.csv');
+            attachment.setContentType('text/csv');
+            attachment.setBody(csvBlob);
+
+            mail.setFileAttachments(new Messaging.EmailFileAttachment[] { attachment });
+        } else {
+            mail.setPlainTextBody(
+                'Hello Admin,\n\n' +
+                'No new lead records were created today.\n\nThank you!'
+            );
+        }
+
+        Messaging.sendEmail(new Messaging.SingleEmailMessage[] { mail });
+    }
+
+    global class LeadDailyReportScheduler implements Schedulable {
+    global void execute(SchedulableContext sc) {
+        LeadDailyReportBatch batch = new LeadDailyReportBatch();
+        Database.executeBatch(batch, 200);  
+    }
+}
+
+}
+
+
+// String cron = '0 0 20 * * ?'; (whatever time here its 8) and 
+//System.schedule('Daily Lead Report Job', cron, new LeadDailyReportScheduler()); in anonymous window
